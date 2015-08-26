@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 from __future__ import unicode_literals
 import ast
+import sys
+import traceback
+
+from io import StringIO
 
 from prompt_toolkit.interface import CommandLineInterface
 from prompt_toolkit.document import Document
@@ -9,6 +13,11 @@ from prompt_toolkit.shortcuts import create_default_application, create_eventloo
 from prompt_toolkit.validation import Validator, ValidationError
 from prompt_toolkit.key_bindings.utils import create_handle_decorator
 from prompt_toolkit.keys import Keys
+from prompt_toolkit.layout.lexers import PygmentsLexer
+
+from pygments.styles.default import DefaultStyle
+from pygments.lexers import PythonTracebackLexer
+from pygments.lexers.lisp import HyLexer
 
 from hy.cmdline import HyREPL
 from hy.lex import LexException, PrematureEndOfInput, tokenize, lexer
@@ -18,6 +27,10 @@ from hy.compiler import hy_compile
 class MyHyREPL(HyREPL):
     def evaluate(self, code):
         return HyREPL.runsource(self, code, "<input>", "single")
+
+    def showtraceback(self):
+        tokens = PythonTracebackLexer().get_tokens(traceback.format_exc())
+        self.cli.print_tokens(tokens, style=DefaultStyle)
 
 
 class HyValidator(Validator):
@@ -64,7 +77,6 @@ def get_column_indent(buffer):
 
 
 def auto_newline(buffer):
-    text = buffer.document.text
     spaces = get_column_indent(buffer)
     buffer.insert_text('\n')
     for _ in range(spaces):
@@ -105,7 +117,6 @@ def load_modified_bindings(registry, filter=Always()):
 
 
 def main():
-    hy_repl = MyHyREPL()
     eventloop = create_eventloop()
     validator = HyValidator()
 
@@ -121,9 +132,13 @@ def main():
         return False
 
     app = create_default_application("λ: ", validator=validator,
-                                     multiline=Condition(src_is_multiline))
+                                     multiline=Condition(src_is_multiline),
+                                     lexer=HyLexer)
     cli = CommandLineInterface(application=app, eventloop=eventloop)
     load_modified_bindings(app.key_bindings_registry)
+
+    hy_repl = MyHyREPL()
+    hy_repl.cli = cli
 
     try:
         while True:
