@@ -1,10 +1,7 @@
 #!/usr/bin/env python
 from __future__ import unicode_literals
 import ast
-import sys
 import traceback
-
-from io import StringIO
 
 from prompt_toolkit.interface import CommandLineInterface
 from prompt_toolkit.document import Document
@@ -13,11 +10,13 @@ from prompt_toolkit.shortcuts import create_default_application, create_eventloo
 from prompt_toolkit.validation import Validator, ValidationError
 from prompt_toolkit.key_bindings.utils import create_handle_decorator
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.lexers import PygmentsLexer
+from prompt_toolkit.completion import Completer, Completion
 
 from pygments.styles.default import DefaultStyle
 from pygments.lexers import PythonTracebackLexer
 from pygments.lexers.lisp import HyLexer
+
+from jedi.api import Interpreter
 
 from hy.cmdline import HyREPL
 from hy.lex import LexException, PrematureEndOfInput, tokenize, lexer
@@ -50,6 +49,44 @@ class HyValidator(Validator):
         except Exception as e:
             raise ValidationError(message='Syntax Error',
                                   index=len(code.text))
+
+
+class HyCompleter(Completer):
+    def __init__(self, repl):
+        self.repl = repl
+
+    def _complete_hy_while_typing(self, document):
+        char_before_cursor = document.char_before_cursor
+        return document.text and (
+            char_before_cursor.isalnum() or char_before_cursor in '_.-')
+
+    def get_completions(self, document, complete_event):
+        if complete_event.completion_requested or self._complete_hy_while_typing(document):
+            script = Interpreter(document.text[:document.cursor_position],
+                                 [self.repl.locals])
+
+            if script:
+                try:
+                    completions = script.completions()
+                except TypeError:
+                    # Issue #9: bad syntax causes completions() to fail in jedi.
+                    # https://github.com/jonathanslenders/python-prompt-toolkit/issues/9
+                    return ""
+                except UnicodeDecodeError:
+                    # Issue #43: UnicodeDecodeError on OpenBSD
+                    # https://github.com/jonathanslenders/python-prompt-toolkit/issues/43
+                    return ""
+                except AttributeError:
+                    # Jedi issue #513: https://github.com/davidhalter/jedi/issues/513
+                    return ""
+                except ValueError:
+                    # Jedi issue: "ValueError: invalid \x escape"
+                    return ""
+                else:
+                    for c in completions:
+                        yield Completion(c.name_with_symbols, len(c.complete) - len(c.name_with_symbols),
+                                         display=c.name_with_symbols)
+        return ""
 
 
 def get_column_indent(buffer):
@@ -117,6 +154,7 @@ def load_modified_bindings(registry, filter=Always()):
 
 
 def main():
+    hy_repl = MyHyREPL()
     eventloop = create_eventloop()
     validator = HyValidator()
 
@@ -133,11 +171,11 @@ def main():
 
     app = create_default_application("λ: ", validator=validator,
                                      multiline=Condition(src_is_multiline),
-                                     lexer=HyLexer)
+                                     lexer=HyLexer,
+                                     completer=HyCompleter(hy_repl))
     cli = CommandLineInterface(application=app, eventloop=eventloop)
     load_modified_bindings(app.key_bindings_registry)
 
-    hy_repl = MyHyREPL()
     hy_repl.cli = cli
 
     try:
