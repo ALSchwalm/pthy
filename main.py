@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 from __future__ import unicode_literals
 import ast
-import sys
 import traceback
 
 from prompt_toolkit.interface import CommandLineInterface
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, Always, HasSelection, IsMultiline, HasSearch
-from prompt_toolkit.shortcuts import create_default_application, create_eventloop, create_default_layout
+from prompt_toolkit.shortcuts import create_default_application, create_eventloop
 from prompt_toolkit.validation import Validator, ValidationError
 from prompt_toolkit.key_bindings.utils import create_handle_decorator
 from prompt_toolkit.keys import Keys
@@ -23,7 +22,6 @@ from jedi.api import Interpreter
 from hy.cmdline import HyREPL
 from hy.lex import LexException, PrematureEndOfInput, tokenize, lexer
 from hy.compiler import hy_compile
-from hy.errors import HyTypeError
 
 
 class MyHyREPL(HyREPL):
@@ -49,7 +47,7 @@ class HyValidator(Validator):
             _ast = hy_compile(tokens, "__console__", root=ast.Interactive)
             # code = ast_compile(ast, filename, symbol)
         except Exception as e:
-            raise ValidationError(message='Syntax Error',
+            raise ValidationError(message='Syntax Error:' + e.message,
                                   index=len(code.text))
 
 
@@ -145,7 +143,14 @@ def load_modified_bindings(registry, filter=Always()):
             save_before=False)
     def _(event):
         b = event.current_buffer
-        if at_the_end(b) and b.validate():
+        lexes = True
+        try:
+            # We don't need full validation here, just test if hy
+            # can lex the text
+            tokenize(b.text)
+        except Exception:
+            lexes = False
+        if at_the_end(b) and lexes:
             b.document = Document(
                 text=b.text.rstrip(),
                 cursor_position=len(b.text.rstrip()))
