@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 from __future__ import unicode_literals
 import ast
+import sys
 import traceback
 
 from prompt_toolkit.interface import CommandLineInterface
 from prompt_toolkit.document import Document
-from prompt_toolkit.filters import Condition, Always, HasSelection, IsMultiline
+from prompt_toolkit.filters import Condition, Always, HasSelection, IsMultiline, HasSearch
 from prompt_toolkit.shortcuts import create_default_application, create_eventloop, create_default_layout
 from prompt_toolkit.validation import Validator, ValidationError
 from prompt_toolkit.key_bindings.utils import create_handle_decorator
@@ -13,6 +14,7 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.completion import Completer, Completion
 
 from pygments.styles.default import DefaultStyle
+from pygments.styles.monokai import MonokaiStyle
 from pygments.lexers import PythonTracebackLexer
 from pygments.lexers.lisp import HyLexer
 
@@ -21,6 +23,7 @@ from jedi.api import Interpreter
 from hy.cmdline import HyREPL
 from hy.lex import LexException, PrematureEndOfInput, tokenize, lexer
 from hy.compiler import hy_compile
+from hy.errors import HyTypeError
 
 
 class MyHyREPL(HyREPL):
@@ -42,7 +45,6 @@ class HyValidator(Validator):
         except LexException as e:
             raise ValidationError(message=str(e),
                                   index=len(code.text))
-
         try:
             _ast = hy_compile(tokens, "__console__", root=ast.Interactive)
             # code = ast_compile(ast, filename, symbol)
@@ -56,31 +58,39 @@ class HyCompleter(Completer):
         self.repl = repl
 
     def _complete_hy_while_typing(self, document):
+        tokens = get_tokens_in_current_sexp(document)
+        if len(tokens) == 1 and (tokens[0].name == "IDENTIFIER"
+                                 and tokens[0].value == "."):
+            return False
         char_before_cursor = document.char_before_cursor
         return document.text and (
             char_before_cursor.isalnum() or char_before_cursor in '_.-')
 
+    def _fixup_contents(self, document):
+        text = document.text_before_cursor
+        tokens = get_tokens_in_current_sexp(document)
+        if tokens:
+            if tokens[0].name == "IDENTIFIER" and tokens[0].value == ".":
+                text = ".".join([id.value for id in tokens[1:]])
+            else:
+                text = text[tokens[0].source_pos.idx:]
+        return text.replace("-", "_")
+
+    def _fixup_completions(self, completions):
+        # hack to hide the fact that hy converts '-' to '_'
+        for c in completions:
+            c._name.value = c._name.value.replace("_", "-")
+        return completions
+
     def get_completions(self, document, complete_event):
         if complete_event.completion_requested or self._complete_hy_while_typing(document):
-            script = Interpreter(document.text[:document.cursor_position],
-                                 [self.repl.locals])
+            text = self._fixup_contents(document)
+            script = Interpreter(text, [self.repl.locals])
 
             if script:
                 try:
-                    completions = script.completions()
-                except TypeError:
-                    # Issue #9: bad syntax causes completions() to fail in jedi.
-                    # https://github.com/jonathanslenders/python-prompt-toolkit/issues/9
-                    return ""
-                except UnicodeDecodeError:
-                    # Issue #43: UnicodeDecodeError on OpenBSD
-                    # https://github.com/jonathanslenders/python-prompt-toolkit/issues/43
-                    return ""
-                except AttributeError:
-                    # Jedi issue #513: https://github.com/davidhalter/jedi/issues/513
-                    return ""
-                except ValueError:
-                    # Jedi issue: "ValueError: invalid \x escape"
+                    completions = self._fixup_completions(script.completions())
+                except Exception:
                     return ""
                 else:
                     for c in completions:
@@ -89,12 +99,10 @@ class HyCompleter(Completer):
         return ""
 
 
-def get_column_indent(buffer):
-    """A quick hack to find the correct indentation
-    from the current point.
-    """
-    text = buffer.document.text[:buffer.cursor_position+1]
+def get_tokens_in_current_sexp(document):
+    text = document.text_before_cursor
     tokens = list(lexer.lex(text))
+
     paren_count = 0
     for i, token in enumerate(tokens[::-1]):
         if token.name == "RPAREN":
@@ -103,14 +111,17 @@ def get_column_indent(buffer):
             if paren_count == 0:
                 break
             paren_count -= 1
-    if len(tokens) > len(tokens) - i + 1:
-        next_token = tokens[len(tokens) - i + 1]
-        colno = next_token.source_pos.colno - 1
-    elif len(tokens) > len(tokens) - i:
-        colno = tokens[len(tokens) - i].source_pos.colno - 1
+    return tokens[len(tokens)-i:]
+
+
+def get_column_indent(buffer):
+    tokens = get_tokens_in_current_sexp(buffer.document)
+    if len(tokens) == 0:
+        return buffer.document.cursor_position_col
+    elif len(tokens) == 1:
+        return tokens[0].source_pos.colno - 1
     else:
-        colno = tokens[-1].source_pos.colno
-    return colno
+        return tokens[1].source_pos.colno - 1
 
 
 def auto_newline(buffer):
@@ -130,7 +141,7 @@ def load_modified_bindings(registry, filter=Always()):
         text = b.document.text_after_cursor
         return text == '' or (text.isspace() and not '\n' in text)
 
-    @handle(Keys.ControlJ, filter=~has_selection & IsMultiline(),
+    @handle(Keys.ControlJ, filter=~has_selection & IsMultiline() & ~HasSearch(),
             save_before=False)
     def _(event):
         b = event.current_buffer
@@ -143,7 +154,7 @@ def load_modified_bindings(registry, filter=Always()):
         else:
             auto_newline(b)
 
-    @handle(Keys.ControlJ, filter=~has_selection & ~IsMultiline(),
+    @handle(Keys.ControlJ, filter=~has_selection & ~IsMultiline() & ~HasSearch(),
             save_before=False)
     def _(event):
         b = event.current_buffer
@@ -172,6 +183,7 @@ def main():
     app = create_default_application("λ: ", validator=validator,
                                      multiline=Condition(src_is_multiline),
                                      lexer=HyLexer,
+                                     style=MonokaiStyle,
                                      completer=HyCompleter(hy_repl))
     cli = CommandLineInterface(application=app, eventloop=eventloop)
     load_modified_bindings(app.key_bindings_registry)
@@ -180,8 +192,11 @@ def main():
 
     try:
         while True:
-            code_obj = cli.run()
-            hy_repl.evaluate(code_obj.text)
+            try:
+                code_obj = cli.run()
+                hy_repl.evaluate(code_obj.text)
+            except KeyboardInterrupt:
+                pass
     except EOFError:
         pass
     finally:
