@@ -78,31 +78,53 @@ class HyCompleter(Completer):
                 text = text[tokens[0].source_pos.idx:]
         return text.replace("-", "_")
 
-    def _find_hy_macros(self, partial_name):
+    def _find_hy_completions(self, partial_name):
         from hy.macros import _hy_macros
+        from hy.compiler import load_stdlib, _stdlib, _compile_table
+        from itertools import chain
+        from keyword import iskeyword
 
-        # Add macros to the completions
-        # NOTE: This doesn't work until after the hy initialization is done.
-        #       (i.e., after the first sexp is evaluated)
+        # Without this, built in macros will not load until after
+        # the first sexp is evalutaed
+        load_stdlib()
+
         matches = []
+
+        # Add macros
         for namespace in _hy_macros.values():
             for name in namespace.keys():
                 if name.startswith(partial_name):
                     matches.append(name)
+
+        # Add builtins
+        for name in chain(_stdlib.keys(), _compile_table.keys()):
+            if str(name).startswith(partial_name) and not iskeyword(str(name)):
+                matches.append(name)
         return matches
 
     def _fixup_completions(self, completions, document):
+        normalized_completions = []
+        tokens = get_tokens_in_current_sexp(document)
+        if len(tokens) > 0 and tokens[0].value != "import":
+            current_token = tokens[-1]
+            matches = self._find_hy_completions(current_token.value)
+            for match in matches:
+                normalized_completions.append(
+                    Completion(match, -len(current_token.value)))
+
         # hack to hide the fact that hy converts '-' to '_'
         for c in completions:
             c._name.value = c._name.value.replace("_", "-")
 
-        tokens = get_tokens_in_current_sexp(document)
-        if len(tokens) > 0:
-            current_token = tokens[-1]
-            matches = self._find_hy_macros(current_token.value)
-            for match in matches:
-                completions.append(Completion(match, -len(current_token.value)))
-        return completions
+            c = Completion(c.name_with_symbols, len(c.complete) - len(c.name_with_symbols),
+                           display=c.name_with_symbols)
+            normalized_completions.append(c)
+
+        def compare_fun(x):
+            return (x.text.startswith('__'),
+                    x.text.startswith('_'),
+                    x.text.lower())
+        return sorted(normalized_completions, key=compare_fun)
 
     def get_completions(self, document, complete_event):
         if complete_event.completion_requested or self._complete_hy_while_typing(document):
@@ -118,11 +140,7 @@ class HyCompleter(Completer):
                     return ""
                 else:
                     for c in completions:
-                        if isinstance(c, Completion):
-                            yield c
-                        else:
-                            yield Completion(c.name_with_symbols, len(c.complete) - len(c.name_with_symbols),
-                                             display=c.name_with_symbols)
+                        yield c
         return ""
 
 
