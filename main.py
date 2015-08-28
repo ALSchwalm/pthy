@@ -78,10 +78,30 @@ class HyCompleter(Completer):
                 text = text[tokens[0].source_pos.idx:]
         return text.replace("-", "_")
 
-    def _fixup_completions(self, completions):
+    def _find_hy_macros(self, partial_name):
+        from hy.macros import _hy_macros
+
+        # Add macros to the completions
+        # NOTE: This doesn't work until after the hy initialization is done.
+        #       (i.e., after the first sexp is evaluated)
+        matches = []
+        for namespace in _hy_macros.values():
+            for name in namespace.keys():
+                if name.startswith(partial_name):
+                    matches.append(name)
+        return matches
+
+    def _fixup_completions(self, completions, document):
         # hack to hide the fact that hy converts '-' to '_'
         for c in completions:
             c._name.value = c._name.value.replace("_", "-")
+
+        tokens = get_tokens_in_current_sexp(document)
+        if len(tokens) > 0:
+            current_token = tokens[-1]
+            matches = self._find_hy_macros(current_token.value)
+            for match in matches:
+                completions.append(Completion(match, -len(current_token.value)))
         return completions
 
     def get_completions(self, document, complete_event):
@@ -91,13 +111,18 @@ class HyCompleter(Completer):
 
             if script:
                 try:
-                    completions = self._fixup_completions(script.completions())
-                except Exception:
+                    completions = self._fixup_completions(script.completions(),
+                                                          document)
+                except Exception as e:
+                    print(str(e))
                     return ""
                 else:
                     for c in completions:
-                        yield Completion(c.name_with_symbols, len(c.complete) - len(c.name_with_symbols),
-                                         display=c.name_with_symbols)
+                        if isinstance(c, Completion):
+                            yield c
+                        else:
+                            yield Completion(c.name_with_symbols, len(c.complete) - len(c.name_with_symbols),
+                                             display=c.name_with_symbols)
         return ""
 
 
