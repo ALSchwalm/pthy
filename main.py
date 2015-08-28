@@ -3,6 +3,8 @@ from __future__ import unicode_literals
 import ast
 import traceback
 
+from os.path import expanduser
+
 from prompt_toolkit.interface import CommandLineInterface
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, Always, HasSelection, IsMultiline, HasSearch
@@ -11,6 +13,7 @@ from prompt_toolkit.validation import Validator, ValidationError
 from prompt_toolkit.key_bindings.utils import create_handle_decorator
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.history import FileHistory
 
 from pygments.styles.default import DefaultStyle
 from pygments.styles.monokai import MonokaiStyle
@@ -44,8 +47,7 @@ class HyValidator(Validator):
             raise ValidationError(message=str(e),
                                   index=len(code.text))
         try:
-            _ast = hy_compile(tokens, "__console__", root=ast.Interactive)
-            # code = ast_compile(ast, filename, symbol)
+            hy_compile(tokens, "__console__", root=ast.Interactive)
         except Exception as e:
             raise ValidationError(message='Syntax Error:' + e.message,
                                   index=len(code.text))
@@ -112,7 +114,7 @@ class HyCompleter(Completer):
                 normalized_completions.append(
                     Completion(match, -len(current_token.value)))
 
-        # hack to hide the fact that hy converts '-' to '_'
+        # Hide the transformations performed by hy
         for c in completions:
             c._name.value = c._name.value.replace("_", "-")
 
@@ -121,8 +123,8 @@ class HyCompleter(Completer):
             normalized_completions.append(c)
 
         def compare_fun(x):
-            return (x.text.startswith('__'),
-                    x.text.startswith('_'),
+            return (x.text.startswith('--'),
+                    x.text.startswith('-'),
                     x.text.lower())
         return sorted(normalized_completions, key=compare_fun)
 
@@ -135,8 +137,7 @@ class HyCompleter(Completer):
                 try:
                     completions = self._fixup_completions(script.completions(),
                                                           document)
-                except Exception as e:
-                    print(str(e))
+                except Exception:
                     return ""
                 else:
                     for c in completions:
@@ -148,14 +149,23 @@ def get_tokens_in_current_sexp(document):
     text = document.text_before_cursor
     tokens = list(lexer.lex(text))
 
-    paren_count = 0
+    counts = [0, 0, 0]
     for i, token in enumerate(tokens[::-1]):
         if token.name == "RPAREN":
-            paren_count += 1
-        elif token.name == "LPAREN":
-            if paren_count == 0:
+            counts[0] += 1
+        elif token.name == "RBRACKET":
+            counts[1] += 1
+        elif token.name == "RCURLY":
+            counts[2] += 1
+        elif token.name in ("LPAREN", "LBRACKET", "LCURLY"):
+            if counts[0] == 0 and counts[1] == 0 and counts[1] == 0:
                 break
-            paren_count -= 1
+            if token.name == "LPAREN":
+                counts[0] -= 1
+            elif token.name == "LBRACKET":
+                counts[1] -= 1
+            elif token.name == "LCURLY":
+                counts[2] -= 1
     return tokens[len(tokens)-i:]
 
 
@@ -220,6 +230,7 @@ def main():
     hy_repl = MyHyREPL()
     eventloop = create_eventloop()
     validator = HyValidator()
+    history = FileHistory(expanduser("~/.pthy_history"))
 
     def src_is_multiline():
         if app and app.buffer:
@@ -236,6 +247,7 @@ def main():
                                      multiline=Condition(src_is_multiline),
                                      lexer=HyLexer,
                                      style=MonokaiStyle,
+                                     history=history,
                                      completer=HyCompleter(hy_repl))
     cli = CommandLineInterface(application=app, eventloop=eventloop)
     load_modified_bindings(app.key_bindings_registry)
