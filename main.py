@@ -55,10 +55,14 @@ class HyCompleter(Completer):
     def __init__(self, repl):
         self.repl = repl
 
+    def _is_dot_sexp(self, tokens):
+        return (len(tokens) > 0 and
+                tokens[0].name == "IDENTIFIER" and
+                tokens[0].value == ".")
+
     def _complete_hy_while_typing(self, document):
         tokens = get_tokens_in_current_sexp(document)
-        if len(tokens) == 1 and (tokens[0].name == "IDENTIFIER"
-                                 and tokens[0].value == "."):
+        if len(tokens) == 1 and self._is_dot_sexp(tokens):
             return False
         char_before_cursor = document.char_before_cursor
         return document.text and (
@@ -68,7 +72,7 @@ class HyCompleter(Completer):
         text = document.text_before_cursor
         tokens = get_tokens_in_current_sexp(document)
         if tokens:
-            if tokens[0].name == "IDENTIFIER" and tokens[0].value == ".":
+            if self._is_dot_sexp(tokens):
                 text = ".".join([id.value for id in tokens[1:]])
             else:
                 text = text[tokens[0].source_pos.idx:]
