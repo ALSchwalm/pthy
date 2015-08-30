@@ -13,7 +13,7 @@ Clone this repository and run `python setup.py install`
 Demo
 ====
 
-![Demo](https://github.com/ALSchwalm/pthy/tree/master/images/demo1.gif)
+![Demo](https://raw.githubusercontent.com/ALSchwalm/pthy/master/images/demo1.gif)
 
 [hy]: hylang.org
 [prompt_toolkit]:http://github.com/jonathanslenders/python-prompt-toolkit
