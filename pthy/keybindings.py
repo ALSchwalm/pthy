@@ -14,7 +14,7 @@ def get_column_indent(buffer):
     tokens = get_tokens_in_current_sexp(buffer.document)
     if len(tokens) == 0:
         return buffer.document.cursor_position_col
-    elif len(tokens) == 1:
+    elif len(tokens) == 1 or tokens[0].name == "LPAREN":
         return tokens[0].source_pos.colno - 1
     else:
         for module, namespace in _hy_macros.items():
@@ -23,7 +23,7 @@ def get_column_indent(buffer):
                     if macro == tokens[0].value:
                         return tokens[0].source_pos.colno
         for name in _compile_table.keys():
-            if str(name) == tokens[0].value:
+            if str(name) == tokens[0].value and len(str(name)) > 1:
                 return tokens[0].source_pos.colno
         return tokens[1].source_pos.colno - 1
 
@@ -43,18 +43,21 @@ def load_modified_bindings(registry, filter=Always()):
         text = b.document.text_after_cursor
         return text == '' or (text.isspace() and not '\n' in text)
 
+    def lexes(b):
+        try:
+            tokenize(b.text)
+        except Exception:
+            return False
+        return True
+
     @handle(Keys.ControlJ, filter=~has_selection & IsMultiline() & ~HasSearch(),
             save_before=False)
     def _(event):
         b = event.current_buffer
-        lexes = True
-        try:
-            # We don't need full validation here, just test if hy
-            # can lex the text
-            tokenize(b.text)
-        except Exception:
-            lexes = False
-        if at_the_end(b) and lexes:
+
+        # We don't need full validation here, just test if hy
+        # can lex the text
+        if at_the_end(b) and lexes(b):
             b.document = Document(
                 text=b.text.rstrip(),
                 cursor_position=len(b.text.rstrip()))
@@ -67,7 +70,7 @@ def load_modified_bindings(registry, filter=Always()):
             save_before=False)
     def _(event):
         b = event.current_buffer
-        if at_the_end(b):
+        if at_the_end(b) and lexes(b):
             b.accept_action.validate_and_handle(event.cli, b)
         else:
             auto_newline(b)

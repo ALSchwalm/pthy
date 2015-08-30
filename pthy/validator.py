@@ -17,5 +17,9 @@ class HyValidator(Validator):
         try:
             hy_compile(tokens, "__console__", root=ast.Interactive)
         except Exception as e:
-            raise ValidationError(message='Syntax Error:' + e.message,
-                                  index=len(code.text))
+            if hasattr(e, "message"):
+                raise ValidationError(message='Syntax Error:' + e.message,
+                                      index=len(code.text))
+            else:
+                raise ValidationError(message='Syntax Error:' + str(e),
+                                      index=len(code.text))
